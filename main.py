@@ -36,6 +36,7 @@ class EKJData:
     z_number: Optional[int]
     report_date: Optional[str]
     total_sales: Optional[Decimal]
+    day_sum_nonfiscal: Optional[Decimal]
     fiscal_receipts_count: Optional[int]
     receipt_totals: Dict[str, Decimal]
 
@@ -96,6 +97,7 @@ def parse_ekj(path: Path) -> EKJData:
     z_number = None
     report_date = None
     total_sales = None
+    day_sum_nonfiscal = None
     fiscal_receipts_count = None
 
     # Work only with "Dienos fiskaline ataskaita" block as requested.
@@ -110,6 +112,7 @@ def parse_ekj(path: Path) -> EKJData:
             break
 
     # Parse report date and totals from the fiscal block.
+    in_nonfiscal_sales = False
     for ln in lines[block_start:block_end]:
         ln_norm = norm(ln)
         if z_number is None:
@@ -129,6 +132,12 @@ def parse_ekj(path: Path) -> EKJData:
                     fiscal_receipts_count = int(parts[-1])
                 except ValueError:
                     pass
+        if "pardavimu ir depozitu sumos" in ln_norm:
+            in_nonfiscal_sales = True
+            continue
+        if in_nonfiscal_sales and day_sum_nonfiscal is None and ln_norm.startswith("dienos suma"):
+            day_sum_nonfiscal = parse_money_comma(ln)
+            in_nonfiscal_sales = False
         if report_date is not None and total_sales is not None and fiscal_receipts_count is not None:
             break
 
@@ -166,6 +175,7 @@ def parse_ekj(path: Path) -> EKJData:
         z_number=z_number,
         report_date=report_date,
         total_sales=total_sales,
+        day_sum_nonfiscal=day_sum_nonfiscal,
         fiscal_receipts_count=fiscal_receipts_count,
         receipt_totals=receipt_totals,
     )
@@ -392,8 +402,21 @@ def main():
 
     tolerance = Decimal(str(cfg.get("tolerance", "0.01")))
     mismatches = []
+    summary_mode = False
 
-    if ekj.total_sales is None:
+    # Some OLD exports are day summaries (single record per Z), not receipt-level data.
+    # In that case compare against EKJ non-fiscal "Dienos suma" and skip receipt-level checks.
+    if len(old_receipts) <= 2 and ekj.day_sum_nonfiscal is not None:
+        if (ekj.day_sum_nonfiscal - old_totals).copy_abs() <= tolerance:
+            summary_mode = True
+
+    if summary_mode:
+        diff = (ekj.day_sum_nonfiscal - old_totals).copy_abs()
+        if diff > tolerance:
+            mismatches.append(
+                f"Dienos suma nesutampa: EKJ {ekj.day_sum_nonfiscal} vs OLD {old_totals} (skirtumas {diff})."
+            )
+    elif ekj.total_sales is None:
         mismatches.append("Nepavyko rasti 'Dienos pardavimai' EKJ faile.")
     else:
         diff = (ekj.total_sales - old_totals).copy_abs()
@@ -402,7 +425,7 @@ def main():
                 f"Dienos pardavimai nesutampa: EKJ {ekj.total_sales} vs OLD {old_totals} (skirtumas {diff})."
             )
 
-    if ekj.fiscal_receipts_count is not None:
+    if (not summary_mode) and ekj.fiscal_receipts_count is not None:
         if ekj.fiscal_receipts_count != len(old_receipts):
             mismatches.append(
                 f"Fiskaliniu kvitu skaicius nesutampa: EKJ {ekj.fiscal_receipts_count} vs OLD {len(old_receipts)}."
@@ -414,11 +437,11 @@ def main():
     missing_in_old = sorted(ekj_receipts - old_receipt_ids)
     missing_in_ekj = sorted(old_receipt_ids - ekj_receipts)
 
-    if missing_in_old:
+    if (not summary_mode) and missing_in_old:
         mismatches.append(f"Truksta OLD: {', '.join(missing_in_old[:50])}" + (" ..." if len(missing_in_old) > 50 else ""))
-    if missing_in_ekj:
+    if (not summary_mode) and missing_in_ekj:
         mismatches.append(f"Truksta EKJ: {', '.join(missing_in_ekj[:50])}" + (" ..." if len(missing_in_ekj) > 50 else ""))
-    if len(ekj_receipts) >= 20 and len(overlap_ids) < 5:
+    if (not summary_mode) and len(ekj_receipts) >= 20 and len(overlap_ids) < 5:
         mismatches.append(
             "Perspejimas: labai mazai sutampanciu kvitu tarp EKJ ir OLD. "
             "Tikrinkite, ar paimtas teisingas OLD failas/parduotuves grupe."
@@ -435,7 +458,7 @@ def main():
             receipt_diffs.append(f"{rid}: EKJ {e_amt} vs OLD {o_amt}")
             if len(receipt_diffs) >= 50:
                 break
-    if receipt_diffs:
+    if (not summary_mode) and receipt_diffs:
         mismatches.append("Kvitu sumu skirtumai (pirmi 50): " + "; ".join(receipt_diffs))
 
     subject = f"EKJ vs OLD patikra: Z {ekj.z_number}"
@@ -447,6 +470,8 @@ def main():
         body += f"\n\nEKJ failas: {ekj_file}\nOLD failai: {', '.join(str(p) for p in old_files)}"
         if selected_groups:
             body += f"\nParinkta OLD grupe: {', '.join(selected_groups)}"
+        if summary_mode:
+            body += "\nRezimas: dienos suvestines palyginimas (be kvitu lyginimo)"
         if args.dry_run:
             print(body)
         else:
@@ -458,6 +483,8 @@ def main():
         ok_body = "Neatitikimu nerasta."
         if selected_groups:
             ok_body += "\nParinkta OLD grupe: " + ", ".join(selected_groups)
+        if summary_mode:
+            ok_body += "\nRezimas: dienos suvestines palyginimas (be kvitu lyginimo)"
         if args.dry_run:
             print(ok_body)
         else:

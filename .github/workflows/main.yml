@@ -23,7 +23,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\main.py
+          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\ekj_checker\main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -31,5 +31,5 @@ jobs:
           name: ekj-checker-exe
           path: |
             dist/ekj_checker.exe
-            run_checker.bat
-            config.toml
+            ekj_checker/run_checker.bat
+            ekj_checker/config.toml

@@ -1,0 +1,18 @@
+email_enabled = false
+email_on_ok = false
+tolerance = "0.01"
+
+[paths]
+ekj_dir = "C:\\ESS\\EOD\\EKJ"
+old_dir = "C:\\ESS\\Export\\ERP"
+output_dir = "C:\\Users\\kasos\\Desktop\\Pardavimu analize"
+
+# [email]
+# Reikalinga tik jei email_enabled = true
+# from = "ekj-checker@yourdomain.lt"
+# to = ["vaidotas.rasciauskas@kedainiurvk.lt"]
+# smtp_host = "smtp.yourdomain.lt"
+# smtp_port = 587
+# smtp_starttls = true
+# smtp_user = "smtp-user"
+# smtp_pass = "smtp-pass"

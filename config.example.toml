@@ -1,0 +1,31 @@
+# Enable/disable email sending
+email_enabled = false
+
+# If true, send OK email as well
+email_on_ok = false
+
+# Amount tolerance for comparisons
+# 0.01 means 1 cent
+tolerance = "0.01"
+
+[paths]
+# Network share for EKJ files
+# Example: "\\\\krvk-term\\ESS\\EOD\\EKJ"
+ekj_dir = "\\\\krvk-term\\ESS\\EOD\\EKJ"
+# Skriptas iesko rekursiskai: ir pagrindiniame kataloge, ir visuose poaplankiuose.
+
+# Local directory for OLD sales files
+old_dir = "C:\\ESS\\Export\\ERP"
+
+# Output directory for analysis reports
+output_dir = "C:\\Users\\kasos\\Desktop\\Pardavimu analize"
+
+# [email]
+# Reikalinga tik jei email_enabled = true
+# from = "ekj-checker@yourdomain.lt"
+# to = ["vaidotas.rasciauskas@kedainiurvk.lt"]
+# smtp_host = "smtp.yourdomain.lt"
+# smtp_port = 587
+# smtp_starttls = true
+# smtp_user = "smtp-user"
+# smtp_pass = "smtp-pass"

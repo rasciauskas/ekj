@@ -1,0 +1,13 @@
+email_on_ok = false
+tolerance = "0.01"
+
+[paths]
+ekj_dir = "/Users/vaidotas/Documents/New project/samples"
+old_dir = "/Users/vaidotas/Documents/New project/samples"
+
+[email]
+from = "noreply@example.com"
+to = ["test@example.com"]
+smtp_host = "localhost"
+smtp_port = 25
+smtp_starttls = false

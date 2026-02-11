@@ -8,11 +8,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -23,7 +21,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\ekj_checker\main.py
+          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -31,5 +29,5 @@ jobs:
           name: ekj-checker-exe
           path: |
             dist/ekj_checker.exe
-            ekj_checker/run_checker.bat
-            ekj_checker/config.toml
+            run_checker.bat
+            config.toml

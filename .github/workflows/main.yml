@@ -6,8 +6,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      APP_DIR: ekj_checker
 
     steps:
       - name: Checkout
@@ -18,11 +16,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Show files (debug)
-        run: |
-          dir
-          dir ${{ env.APP_DIR }}
-
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
@@ -30,7 +23,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\${{ env.APP_DIR }}\main.py
+          pyinstaller --onefile --name ekj_checker --distpath .\dist --workpath .\build --specpath .\build .\main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -38,5 +31,5 @@ jobs:
           name: ekj-checker-exe
           path: |
             dist/ekj_checker.exe
-            ${{ env.APP_DIR }}/run_checker.bat
-            ${{ env.APP_DIR }}/config.toml
+            run_checker.bat
+            config.toml

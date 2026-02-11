@@ -10,6 +10,7 @@ Trumpai: skriptas palygina EKJ (kasos cekių žurnalą) su OLD pardavimų failai
   - fiskalinių kvitų skaičių
   - kvitų sąrašą ir jų sumas
 - Iš OLD failų paima visus kvitus, kurių `I06_DOK_NR` baigiasi `/Z` ir atitinka dienos datą
+  - Naudojami tik `riv_sales_*.old` failai (ne `riv_invoices_*.old`)
 - Palygina:
   - dienos sumą
   - kvitų skaičių

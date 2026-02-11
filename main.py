@@ -27,6 +27,8 @@ ZNUM_RE = re.compile(r"Z(?: ataskaitos)? numeris\s+(\d+)", re.IGNORECASE)
 ZNUM_RE_ALT = re.compile(r"Z numeris\s+(\d+)", re.IGNORECASE)
 DATE_RE = re.compile(r"Ataskaitos prad\w+\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})")
 DATE_END_RE = re.compile(r"Ataskaitos pabaig\w+\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})")
+EKJ_NAME_TS_RE = re.compile(r"^(\d{14})_")
+EKJ_NAME_DATE_RE = re.compile(r"^(\d{8})")
 
 
 @dataclass
@@ -239,20 +241,47 @@ def parse_old(
     return OLDData(total_sales=total_sales, receipt_totals=receipt_totals, source_group=chosen_key)
 
 
+def parse_ekj_name_timestamp(path: Path) -> Optional[datetime]:
+    m = EKJ_NAME_TS_RE.match(path.name)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def parse_ekj_name_date(path: Path) -> Optional[str]:
+    m = EKJ_NAME_DATE_RE.match(path.name)
+    if not m:
+        return None
+    raw = m.group(1)
+    return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
+
+
 def find_latest_ekj(ekj_dir: Path) -> Optional[Path]:
     # Search recursively because EKJ files are stored in shop subfolders.
     candidates = [p for p in ekj_dir.rglob("*.txt") if p.is_file()]
     if not candidates:
         return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Prefer timestamp in filename (stable across copy operations), fallback to mtime.
+    candidates.sort(
+        key=lambda p: (parse_ekj_name_timestamp(p) or datetime.fromtimestamp(p.stat().st_mtime)),
+        reverse=True,
+    )
     return candidates[0]
 
 
 def find_old_files(old_dir: Path, report_date: Optional[str]) -> list[Path]:
-    files = list(old_dir.glob("*.old"))
+    # Only sales exports are relevant for this check.
+    files = list(old_dir.glob("riv_sales_*.old"))
     if report_date:
         yyyymmdd = report_date.replace("-", "")
         files = [p for p in files if f"d{yyyymmdd}" in p.name.lower()]
+    # Prefer "a" snapshots when present for the day.
+    a_files = [p for p in files if p.name.lower().endswith("_a.old")]
+    if a_files:
+        files = a_files
     return files
 
 
@@ -317,6 +346,8 @@ def main():
         sys.exit(2)
 
     ekj = parse_ekj(ekj_file)
+    if ekj.report_date is None:
+        ekj.report_date = parse_ekj_name_date(ekj_file)
     if ekj.z_number is None:
         print("ERROR: Z number not found in EKJ", file=sys.stderr)
         sys.exit(2)

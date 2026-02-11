@@ -8,6 +8,9 @@ email_on_ok = false
 # 0.01 means 1 cent
 tolerance = "0.01"
 
+# Optional: force OLD store code group (I06_KODAS_KS), e.g. "74"
+# store_code = "74"
+
 [paths]
 # Network share for EKJ files
 # Example: "\\\\krvk-term\\ESS\\EOD\\EKJ"

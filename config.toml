@@ -1,9 +1,10 @@
 email_enabled = false
 email_on_ok = false
 tolerance = "0.01"
+store_code = "74"
 
 [paths]
-ekj_dir = "C:\\ESS\\EOD\\EKJ"
+ekj_dir = "C:\\ESS\\EOD\\EKJ\\74_Vainotiskiai"
 old_dir = "C:\\ESS\\Export\\ERP"
 output_dir = "C:\\Users\\kasos\\Desktop\\Pardavimu analize"
 

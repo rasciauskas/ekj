@@ -98,20 +98,24 @@ def parse_ekj(path: Path) -> EKJData:
     total_sales = None
     fiscal_receipts_count = None
 
-    # Prefer the final fiscal Z block (line starting with "Z numeris", not interim lines).
-    z_indexes = [i for i, ln in enumerate(lines) if ZNUM_RE_ALT.search(ln)]
-    if not z_indexes:
-        z_indexes = [i for i, ln in enumerate(lines) if ZNUM_RE.search(ln)]
-    z_idx = z_indexes[-1] if z_indexes else 0
+    # Work only with "Dienos fiskaline ataskaita" block as requested.
+    fiscal_block_indexes = [
+        i for i, ln in enumerate(lines) if "dienos fiskaline ataskaita" in norm(ln)
+    ]
+    block_start = fiscal_block_indexes[-1] if fiscal_block_indexes else 0
+    block_end = min(block_start + 700, len(lines))
+    for i in range(block_start, block_end):
+        if "nefiskaline dalis" in norm(lines[i]):
+            block_end = i
+            break
 
-    if z_indexes:
-        m = ZNUM_RE_ALT.search(lines[z_idx]) or ZNUM_RE.search(lines[z_idx])
-        if m:
-            z_number = int(m.group(1))
-
-    # Parse report date and totals from the selected Z block window.
-    for ln in lines[z_idx:z_idx + 500]:
+    # Parse report date and totals from the fiscal block.
+    for ln in lines[block_start:block_end]:
         ln_norm = norm(ln)
+        if z_number is None:
+            m = ZNUM_RE_ALT.search(ln) or ZNUM_RE.search(ln)
+            if m:
+                z_number = int(m.group(1))
         if report_date is None:
             m = DATE_END_RE.search(ln)
             if m:
@@ -135,6 +139,9 @@ def parse_ekj(path: Path) -> EKJData:
         ln = lines[i]
         m = RECEIPT_RE.match(ln.lstrip())
         if not m:
+            i += 1
+            continue
+        if z_number is not None and int(m.group(2)) != z_number:
             i += 1
             continue
         receipt_id = f"{m.group(1)}/{m.group(2)}"
@@ -169,6 +176,7 @@ def parse_old(
     z_number: int,
     report_date: Optional[str],
     ekj_receipts: Optional[Dict[str, Decimal]] = None,
+    expected_store_code: Optional[str] = None,
 ) -> OLDData:
     text = path.read_text(errors="ignore")
     blocks = text.split("<I06>")
@@ -177,9 +185,13 @@ def parse_old(
     for block in blocks[1:]:
         block_text = block.split("</I06>")[0]
         m_nr = re.search(r"<I06_DOK_NR>(.*?)</I06_DOK_NR>", block_text)
+        m_op_tip = re.search(r"<I06_OP_TIP>(.*?)</I06_OP_TIP>", block_text)
         m_date = re.search(r"<I06_OP_DATA>(.*?)</I06_OP_DATA>", block_text)
         m_store = re.search(r"<I06_KODAS_KS>(.*?)</I06_KODAS_KS>", block_text)
-        if not m_nr:
+        if not m_nr or not m_op_tip:
+            continue
+        # Keep only sales receipt operation type.
+        if m_op_tip.group(1).strip() != "51":
             continue
         dok_nr = m_nr.group(1).strip()
         # filter by Z number
@@ -208,13 +220,18 @@ def parse_old(
         group_key = (m_store.group(1).strip() if m_store else "UNKNOWN")
         if group_key not in grouped:
             grouped[group_key] = {}
-        grouped[group_key][dok_nr] = amt
+        # Keep first occurrence of a receipt id inside group.
+        if dok_nr not in grouped[group_key]:
+            grouped[group_key][dok_nr] = amt
 
     if not grouped:
         return OLDData(total_sales=Decimal("0.00"), receipt_totals={}, source_group=None)
 
-    # Pick best store group by overlap with EKJ receipts to avoid mixing multiple stores.
-    if ekj_receipts:
+    # If store code is explicitly configured, prefer it.
+    if expected_store_code and expected_store_code in grouped:
+        chosen_key = expected_store_code
+    # Else pick best store group by overlap with EKJ receipts to avoid mixing multiple stores.
+    elif ekj_receipts:
         ekj_ids = set(ekj_receipts.keys())
         best_key = None
         best_overlap = -1
@@ -365,8 +382,9 @@ def main():
     old_totals = Decimal("0.00")
     old_receipts: dict[str, Decimal] = {}
     selected_groups = []
+    expected_store_code = str(cfg.get("store_code", "")).strip() or None
     for f in old_files:
-        data = parse_old(f, ekj.z_number, ekj.report_date, ekj.receipt_totals)
+        data = parse_old(f, ekj.z_number, ekj.report_date, ekj.receipt_totals, expected_store_code)
         old_totals += data.total_sales
         old_receipts.update(data.receipt_totals)
         if data.source_group:

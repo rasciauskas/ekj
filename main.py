@@ -42,6 +42,7 @@ class EKJData:
 class OLDData:
     total_sales: Decimal
     receipt_totals: Dict[str, Decimal]
+    source_group: Optional[str] = None
 
 
 def read_text(path: Path) -> str:
@@ -95,40 +96,35 @@ def parse_ekj(path: Path) -> EKJData:
     total_sales = None
     fiscal_receipts_count = None
 
-    # Find Z number and report date
-    for ln in lines:
+    # Prefer the final fiscal Z block (line starting with "Z numeris", not interim lines).
+    z_indexes = [i for i, ln in enumerate(lines) if ZNUM_RE_ALT.search(ln)]
+    if not z_indexes:
+        z_indexes = [i for i, ln in enumerate(lines) if ZNUM_RE.search(ln)]
+    z_idx = z_indexes[-1] if z_indexes else 0
+
+    if z_indexes:
+        m = ZNUM_RE_ALT.search(lines[z_idx]) or ZNUM_RE.search(lines[z_idx])
+        if m:
+            z_number = int(m.group(1))
+
+    # Parse report date and totals from the selected Z block window.
+    for ln in lines[z_idx:z_idx + 500]:
         ln_norm = norm(ln)
-        if z_number is None:
-            m = ZNUM_RE.search(ln) or ZNUM_RE_ALT.search(ln)
-            if m:
-                z_number = int(m.group(1))
         if report_date is None:
             m = DATE_END_RE.search(ln)
             if m:
                 report_date = m.group(1)
-        if z_number is not None and report_date is not None:
+        if total_sales is None and ln_norm.startswith("dienos pardavimai"):
+            total_sales = parse_money_comma(ln)
+        if fiscal_receipts_count is None and ("fiskal" in ln_norm and "kvit" in ln_norm and "skai" in ln_norm):
+            parts = ln_norm.split()
+            if parts:
+                try:
+                    fiscal_receipts_count = int(parts[-1])
+                except ValueError:
+                    pass
+        if report_date is not None and total_sales is not None and fiscal_receipts_count is not None:
             break
-
-    # Find totals after Z block
-    if z_number is not None:
-        try:
-            z_idx = next(i for i, ln in enumerate(lines) if ZNUM_RE.search(ln) or ZNUM_RE_ALT.search(ln))
-        except StopIteration:
-            z_idx = 0
-        for ln in lines[z_idx:z_idx + 500]:
-            ln_norm = norm(ln)
-            if total_sales is None and ln_norm.startswith("dienos pardavimai"):
-                total_sales = parse_money_comma(ln)
-            if fiscal_receipts_count is None and ln_norm.startswith("fiskaliniu kvitu skaicius"):
-                # last token should be integer
-                parts = ln_norm.split()
-                if parts:
-                    try:
-                        fiscal_receipts_count = int(parts[-1])
-                    except ValueError:
-                        pass
-            if total_sales is not None and fiscal_receipts_count is not None:
-                break
 
     # Receipt totals
     receipt_totals: dict[str, Decimal] = {}
@@ -166,18 +162,22 @@ def parse_ekj(path: Path) -> EKJData:
     )
 
 
-def parse_old(path: Path, z_number: int, report_date: Optional[str]) -> OLDData:
+def parse_old(
+    path: Path,
+    z_number: int,
+    report_date: Optional[str],
+    ekj_receipts: Optional[Dict[str, Decimal]] = None,
+) -> OLDData:
     text = path.read_text(errors="ignore")
     blocks = text.split("<I06>")
-    receipt_totals: dict[str, Decimal] = {}
-    total_sales = Decimal("0.00")
+    grouped: Dict[str, Dict[str, Decimal]] = {}
 
     for block in blocks[1:]:
         block_text = block.split("</I06>")[0]
         m_nr = re.search(r"<I06_DOK_NR>(.*?)</I06_DOK_NR>", block_text)
-        m_sum = re.search(r"<I06_MOK_SUMA>(.*?)</I06_MOK_SUMA>", block_text)
         m_date = re.search(r"<I06_OP_DATA>(.*?)</I06_OP_DATA>", block_text)
-        if not m_nr or not m_sum:
+        m_store = re.search(r"<I06_KODAS_KS>(.*?)</I06_KODAS_KS>", block_text)
+        if not m_nr:
             continue
         dok_nr = m_nr.group(1).strip()
         # filter by Z number
@@ -186,15 +186,57 @@ def parse_old(path: Path, z_number: int, report_date: Optional[str]) -> OLDData:
         if report_date and m_date:
             if m_date.group(1).strip().replace(".", "-") != report_date:
                 continue
-        amt = None
-        try:
-            amt = Decimal(m_sum.group(1).strip())
-        except InvalidOperation:
-            continue
-        receipt_totals[dok_nr] = amt
-        total_sales += amt
+        # Real receipt gross is item net + item VAT, not I06_MOK_SUMA.
+        net_vals = re.findall(r"<I07_SUMA>(.*?)</I07_SUMA>", block_text)
+        vat_vals = re.findall(r"<I07_PVM>(.*?)</I07_PVM>", block_text)
+        if net_vals:
+            try:
+                net_sum = sum((Decimal(v.strip()) for v in net_vals), Decimal("0.00"))
+                vat_sum = sum((Decimal(v.strip()) for v in vat_vals), Decimal("0.00"))
+                amt = net_sum + vat_sum
+            except InvalidOperation:
+                continue
+        else:
+            # Fallback for records without item rows.
+            vals = re.findall(r"<I13_SUMA>(.*?)</I13_SUMA>", block_text)
+            try:
+                amt = sum((Decimal(v.strip()) for v in vals), Decimal("0.00"))
+            except InvalidOperation:
+                continue
+        group_key = (m_store.group(1).strip() if m_store else "UNKNOWN")
+        if group_key not in grouped:
+            grouped[group_key] = {}
+        grouped[group_key][dok_nr] = amt
 
-    return OLDData(total_sales=total_sales, receipt_totals=receipt_totals)
+    if not grouped:
+        return OLDData(total_sales=Decimal("0.00"), receipt_totals={}, source_group=None)
+
+    # Pick best store group by overlap with EKJ receipts to avoid mixing multiple stores.
+    if ekj_receipts:
+        ekj_ids = set(ekj_receipts.keys())
+        best_key = None
+        best_overlap = -1
+        best_diff = Decimal("999999999")
+        for key, receipts in grouped.items():
+            overlap_ids = ekj_ids & set(receipts.keys())
+            overlap = len(overlap_ids)
+            diff = sum(
+                ((ekj_receipts[rid] - receipts[rid]).copy_abs() for rid in overlap_ids),
+                Decimal("0.00"),
+            )
+            if overlap > best_overlap or (overlap == best_overlap and diff < best_diff):
+                best_key = key
+                best_overlap = overlap
+                best_diff = diff
+        chosen_key = best_key if best_key is not None else next(iter(grouped))
+    else:
+        # Fallback: use the largest group.
+        chosen_key = max(grouped, key=lambda k: len(grouped[k]))
+
+    receipt_totals = grouped[chosen_key]
+    total_sales = sum(receipt_totals.values(), Decimal("0.00"))
+
+    return OLDData(total_sales=total_sales, receipt_totals=receipt_totals, source_group=chosen_key)
 
 
 def find_latest_ekj(ekj_dir: Path) -> Optional[Path]:
@@ -291,10 +333,13 @@ def main():
 
     old_totals = Decimal("0.00")
     old_receipts: dict[str, Decimal] = {}
+    selected_groups = []
     for f in old_files:
-        data = parse_old(f, ekj.z_number, ekj.report_date)
+        data = parse_old(f, ekj.z_number, ekj.report_date, ekj.receipt_totals)
         old_totals += data.total_sales
         old_receipts.update(data.receipt_totals)
+        if data.source_group:
+            selected_groups.append(f"{f.name}:KS={data.source_group}")
 
     tolerance = Decimal(str(cfg.get("tolerance", "0.01")))
     mismatches = []
@@ -316,6 +361,7 @@ def main():
 
     ekj_receipts = set(ekj.receipt_totals.keys())
     old_receipt_ids = set(old_receipts.keys())
+    overlap_ids = ekj_receipts & old_receipt_ids
     missing_in_old = sorted(ekj_receipts - old_receipt_ids)
     missing_in_ekj = sorted(old_receipt_ids - ekj_receipts)
 
@@ -323,10 +369,15 @@ def main():
         mismatches.append(f"Truksta OLD: {', '.join(missing_in_old[:50])}" + (" ..." if len(missing_in_old) > 50 else ""))
     if missing_in_ekj:
         mismatches.append(f"Truksta EKJ: {', '.join(missing_in_ekj[:50])}" + (" ..." if len(missing_in_ekj) > 50 else ""))
+    if len(ekj_receipts) >= 20 and len(overlap_ids) < 5:
+        mismatches.append(
+            "Perspejimas: labai mazai sutampanciu kvitu tarp EKJ ir OLD. "
+            "Tikrinkite, ar paimtas teisingas OLD failas/parduotuves grupe."
+        )
 
     # receipt totals diff
     receipt_diffs = []
-    for rid in sorted(ekj_receipts & old_receipt_ids):
+    for rid in sorted(overlap_ids):
         e_amt = ekj.receipt_totals.get(rid)
         o_amt = old_receipts.get(rid)
         if e_amt is None or o_amt is None:
@@ -345,6 +396,8 @@ def main():
     if mismatches:
         body = "Rasti neatitikimai:\n\n" + "\n".join(f"- {m}" for m in mismatches)
         body += f"\n\nEKJ failas: {ekj_file}\nOLD failai: {', '.join(str(p) for p in old_files)}"
+        if selected_groups:
+            body += f"\nParinkta OLD grupe: {', '.join(selected_groups)}"
         if args.dry_run:
             print(body)
         else:
@@ -354,6 +407,8 @@ def main():
             print(f"Report written: {report_path}")
     else:
         ok_body = "Neatitikimu nerasta."
+        if selected_groups:
+            ok_body += "\nParinkta OLD grupe: " + ", ".join(selected_groups)
         if args.dry_run:
             print(ok_body)
         else:

@@ -402,20 +402,25 @@ def main():
 
     tolerance = Decimal(str(cfg.get("tolerance", "0.01")))
     mismatches = []
-    summary_mode = False
-
     # Some OLD exports are day summaries (single record per Z), not receipt-level data.
     # In that case compare against EKJ non-fiscal "Dienos suma" and skip receipt-level checks.
-    if len(old_receipts) <= 2 and ekj.day_sum_nonfiscal is not None:
-        if (ekj.day_sum_nonfiscal - old_totals).copy_abs() <= tolerance:
-            summary_mode = True
+    summary_mode = len(old_receipts) <= 2 and ekj.day_sum_nonfiscal is not None
 
     if summary_mode:
-        diff = (ekj.day_sum_nonfiscal - old_totals).copy_abs()
-        if diff > tolerance:
+        diff_nonfiscal = (ekj.day_sum_nonfiscal - old_totals).copy_abs()
+        # For summary OLD exports, expected match is EKJ "Dienos suma" from non-fiscal block.
+        if diff_nonfiscal > tolerance:
             mismatches.append(
-                f"Dienos suma nesutampa: EKJ {ekj.day_sum_nonfiscal} vs OLD {old_totals} (skirtumas {diff})."
+                f"Dienos suma nesutampa: EKJ {ekj.day_sum_nonfiscal} vs OLD {old_totals} (skirtumas {diff_nonfiscal})."
             )
+        # Optional context: show fiscal sales delta for the same day.
+        if ekj.total_sales is not None:
+            diff_fiscal = (ekj.total_sales - old_totals).copy_abs()
+            if diff_fiscal > tolerance:
+                mismatches.append(
+                    f"Info: Dienos pardavimai (fiskaline dalis) EKJ {ekj.total_sales}, "
+                    f"OLD {old_totals}, skirtumas {diff_fiscal}."
+                )
     elif ekj.total_sales is None:
         mismatches.append("Nepavyko rasti 'Dienos pardavimai' EKJ faile.")
     else:
